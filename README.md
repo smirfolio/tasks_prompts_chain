@@ -12,14 +12,22 @@ A Mini Python library for creating and executing chains of prompts using OpenAI'
 - Multiple output formats (JSON, Markdown, CSV, Text)
 - Async/await support
 
-## Installation
+## Dependancies
 
-### For Users
+Please install typing-extensions and openai python packages
+```bash
+pip install typing-extensions
+pip install openai
+```
+
+## Installation from source code
+
+### For Users required from source gitHub repo
 ```bash
 pip install -r requirements/requirements.txt
 ```
 
-### For Developers
+### For Developers required from source gitHub repo
 ```bash
 pip install -r requirements/requirements.txt
 pip install -r requirements/requirements-dev.txt
