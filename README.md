@@ -1,4 +1,4 @@
-# PromptChain
+# TasksPromptsChain
 
 A Mini Python library for creating and executing chains of prompts using OpenAI's API with streaming support and output template formatting.
 
