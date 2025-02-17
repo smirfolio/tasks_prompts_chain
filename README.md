@@ -19,6 +19,10 @@ Please install typing-extensions and openai python packages
 pip install typing-extensions
 pip install openai
 ```
+To Install the library: 
+```
+pip install tasks_prompts_chain
+```
 
 ## Installation from source code
 
