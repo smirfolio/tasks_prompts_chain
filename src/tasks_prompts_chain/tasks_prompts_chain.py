@@ -89,6 +89,7 @@ class TasksPromptsChain:
         self.final_result_placeholder = final_result_placeholder or "final_result"
         self._results = {}
         self._output_template = None
+        self._final_output_template = None
         self._current_stream_buffer = ""
 
     def set_output_template(self, template: str) -> None:
@@ -117,6 +118,7 @@ class TasksPromptsChain:
             output = output.replace(f"{{{{{placeholder}}}}}", value or "")
         # Replace current streaming placeholder
         output = output.replace(f"{{{{{self.final_result_placeholder}}}}}", self._current_stream_buffer)
+        self._final_output_template=output
         return output
 
     async def execute_chain(self, prompts: List[Union[Dict, PromptTemplate]], temperature: float = 0.7) -> AsyncGenerator[str, None]:
@@ -181,7 +183,8 @@ class TasksPromptsChain:
                         delta = chunk.choices[0].delta.content
                         response_content += delta
                         self._current_stream_buffer = response_content
-                        yield self._format_current_stream()
+                        self._format_current_stream()
+                        yield response_content
                 
                 responses.append(response_content)
                 
@@ -209,6 +212,14 @@ class TasksPromptsChain:
         """
         return self._results.get(placeholder)
 
+    def get_final_result_within_template(self) -> Optional[str]:
+        """
+        Get tje final result
+        Returns:
+            Optional[str]: The response for that placeholder if it exists, None otherwise
+        """
+        return self._final_output_template
+    
     def template_output(self, template: str) -> None:
         """
         Set the output template for streaming responses.
