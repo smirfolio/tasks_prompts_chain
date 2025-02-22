@@ -75,25 +75,6 @@ async def main():
 
 ## Advanced Usage
 
-### Using Templates
-
-```python
-# Set output template before execution
-chain.template_output("""
-<result>
-    <design>
-    ### Design Concept:
-    {{design_concept}}
-    </design>
-    
-    <colors>
-    ### Color Palette:
-    {{color_palette}}
-    </colors>
-</result>
-""")
-```
-
 ### Using System Prompts
 
 ```python
@@ -117,6 +98,34 @@ chain = TasksPromptsChain(
 )
 ```
 
+### Using Templates
+
+You must call this set method befor the excution of the prompting query (chain.execute_chain(prompts))
+
+```python
+# Set output template before execution
+chain.template_output("""
+<result>
+    <design>
+    ### Design Concept:
+    {{design_concept}}
+    </design>
+    
+    <colors>
+    ### Color Palette:
+    {{color_palette}}
+    </colors>
+</result>
+""")
+```
+then retrieves the final result within the template : 
+
+```python
+# print out the final result in the well formated template
+print(chain.get_final_result_within_template())
+```
+
+
 ## API Reference
 
 ### TasksPromptsChain Class
@@ -138,6 +147,9 @@ chain = TasksPromptsChain(
 - `template_output(template: str) -> None`
   - Sets the output template format
   
+- `get_final_result_within_template(self) -> Optional[str]`
+  - Retrieves the final query result with the defined template in template_output();
+
 - `get_result(placeholder: str) -> Optional[str]`
   - Retrieves a specific result by placeholder
 
