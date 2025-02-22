@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 [project]
 name = "tasks_prompts_chain"
-version = "0.0.2"
+version = "0.0.4"
 authors = [
   { name="Samir Ben Sghaier", email="ben.sghaier.samir@gmail.com" },
 ]
