@@ -121,7 +121,7 @@ class TasksPromptsChain:
         self._final_output_template=output
         return output
 
-    async def execute_chain(self, prompts: List[Union[Dict, PromptTemplate]], temperature: float = 0.7) -> AsyncGenerator[str, None]:
+    async def execute_chain(self, prompts: List[Union[Dict, PromptTemplate]]) -> AsyncGenerator[str, None]:
         """
         Execute a chain of prompts sequentially, with placeholder replacement.
         
@@ -132,8 +132,6 @@ class TasksPromptsChain:
                                                             "output_format": str,
                                                             "output_placeholder": str
                                                         }
-            temperature (float): Temperature parameter for response generation (0.0 to 1.0)
-            
         Returns:
             List[str]: List of responses for each prompt
         """
@@ -184,14 +182,12 @@ class TasksPromptsChain:
                         response_content += delta
                         self._current_stream_buffer = response_content
                         self._format_current_stream()
-                        yield response_content
-                
-                responses.append(response_content)
-                
-                # Store response with placeholder if specified
-                if prompt_template.output_placeholder:
-                    placeholder_values[prompt_template.output_placeholder] = response_content
-                    self._results[prompt_template.output_placeholder] = response_content
+                        responses.append(response_content)
+                        # Store response with placeholder if specified
+                        if prompt_template.output_placeholder:
+                            placeholder_values[prompt_template.output_placeholder] = response_content
+                            self._results[prompt_template.output_placeholder] = response_content
+                        yield response_content                
 
         except Exception as e:
             raise Exception(f"Error in prompt chain execution at prompt {i}: {str(e)}")
@@ -235,45 +231,3 @@ class TasksPromptsChain:
             raise Exception("template_output must be called before execute_chain")
         self.set_output_template(template)
 
-    def execute_chain_with_system(self, prompts: List[str], system_prompt: str, temperature: float = 0.7) -> List[str]:
-        """
-        Execute a chain of prompts with a system prompt included.
-        
-        Args:
-            prompts (List[str]): List of prompts to process in sequence
-            system_prompt (str): System prompt to set context for all interactions
-            temperature (float): Temperature parameter for response generation (0.0 to 1.0)
-            
-        Returns:
-            List[str]: List of responses for each prompt
-        """
-        responses = []
-        context = ""
-
-        try:
-            for i, prompt in enumerate(prompts):
-                # Combine previous context with current prompt if not the first prompt
-                full_prompt = f"{context}\n{prompt}" if context else prompt
-                
-                response = self.client.chat.completions.create(
-                    model=self.model,
-                    messages=[
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": full_prompt}
-                    ],
-                    temperature=temperature,
-                    max_tokens=4120,
-                    stream=True
-                )
-                
-                # Extract the response content
-                response_content = response.choices[0].message.content
-                responses.append(response_content)
-                
-                # Update context for next iteration
-                context = response_content
-
-        except Exception as e:
-            raise Exception(f"Error in prompt chain execution at prompt {i}: {str(e)}")
-
-        return responses
