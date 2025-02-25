@@ -45,8 +45,13 @@ from tasks_prompts_chain import TasksPromptsChain
 async def main():
     # Initialize the chain
     chain = TasksPromptsChain(
-        model="gpt-3.5-turbo",
-        api_key="your-api-key",
+        model_options={
+            "model": "gpt-3.5-turbo",
+            "api_key": "your-api-key",
+            "temperature": 0.1,
+            "max_tokens": 4120,
+            "stream": True
+        },
         final_result_placeholder="design_result"
     )
 
@@ -79,8 +84,13 @@ async def main():
 
 ```python
 chain = TasksPromptsChain(
-    model="gpt-3.5-turbo",
-    api_key="your-api-key",
+    model_options={
+            "model": "gpt-3.5-turbo",
+            "api_key": "your-api-key",
+            "temperature": 0.1,
+            "max_tokens": 4120,
+            "stream": True
+        },
     final_result_placeholder="result",
     system_prompt="You are a professional design expert specialized in luxury products",
     system_apply_to_all_prompts=True
@@ -91,10 +101,15 @@ chain = TasksPromptsChain(
 
 ```python
 chain = TasksPromptsChain(
-    model="gpt-3.5-turbo",
-    api_key="your-api-key",
+    model_options={
+            "model": "your-custom-model",
+            "api_key": "your-api-key",
+            "base_url": "https://your-custom-endpoint.com/v1",
+            "temperature": 0.1,
+            "max_tokens": 4120,
+            "stream": True
+        },
     final_result_placeholder="result",
-    base_url="https://your-custom-endpoint.com/v1"
 )
 ```
 
