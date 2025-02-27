@@ -187,7 +187,7 @@ class TasksPromptsChain:
                         if prompt_template.output_placeholder:
                             placeholder_values[prompt_template.output_placeholder] = response_content
                             self._results[prompt_template.output_placeholder] = response_content
-                        yield response_content                
+                        yield delta                
 
         except Exception as e:
             raise Exception(f"Error in prompt chain execution at prompt {i}: {str(e)}")
