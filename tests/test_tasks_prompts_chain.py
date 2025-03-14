@@ -118,9 +118,11 @@ async def test_execute_chain_basic(mocker):
     responses = []
     async for response in chain.execute_chain(prompts):
         responses.append(response)
-    
+
     assert len(responses) == 3
-    assert responses[-1] == "This is a test response"
+    assert responses[0] == "This is "
+    assert responses[1] == "a test "
+    assert responses[2] == "response"
     assert chain.get_result("result1") == "This is a test response"
 
 def test_output_format_enum():
@@ -130,9 +132,6 @@ def test_output_format_enum():
     assert OutputFormat.TEXT.value == "TEXT"
 import pytest
 from tasks_prompts_chain import TasksPromptsChain, PromptTemplate, OutputFormat
-from typing import List, Dict
-import json
-import asyncio
 from unittest.mock import AsyncMock, MagicMock
 
 class MockResponse:
