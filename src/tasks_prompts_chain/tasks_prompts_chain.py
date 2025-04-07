@@ -29,8 +29,8 @@ Copyright 2025 Samir Ben Sghaier - Smirfolio
 
 """
 from typing import List, Optional, Dict, Union, AsyncGenerator, TypedDict
-from openai import AsyncOpenAI
 from enum import Enum
+from .client_llm_sdk import ClientLLMSDK
 
 class OutputFormat(Enum):
     JSON = "JSON"
@@ -44,7 +44,6 @@ class ModelOptions(TypedDict, total=False):
     base_url: Optional[str]
     temperature: Optional[float]
     max_tokens: Optional[int]
-    stream: Optional[bool]
 
 class PromptTemplate:
     def __init__(self, prompt: str, output_format: str = "TEXT", output_placeholder: Optional[str] = None):
@@ -55,7 +54,8 @@ class PromptTemplate:
 class TasksPromptsChain:
     """A utility class for creating and executing prompt chains using OpenAI's API."""
     
-    def __init__(self, 
+    def __init__(self,
+                 injectedLLM,
                  model_options: ModelOptions,
                  system_prompt: Optional[str] = None,
                  final_result_placeholder: Optional[str] = None,
@@ -70,20 +70,17 @@ class TasksPromptsChain:
                 - base_url (str, optional): API endpoint URL
                 - temperature (float, optional): Temperature parameter (default: 0.7)
                 - max_tokens (int, optional): Maximum tokens (default: 4120)
-                - stream (bool, optional): Whether to stream responses (default: True)
             system_prompt (str, optional): System prompt to set context for the LLM
             final_result_placeholder (str, optional): The placeholder name for the final result
             system_apply_to_all_prompts (bool): Whether to apply system prompt to all prompts
         """
-        self.model = model_options["model"]
+        self.model = model_options.get("model", "gpt-3.5-turbo")
         self.temperature = model_options.get("temperature", 0.7)
         self.max_tokens = model_options.get("max_tokens", 4120)
-        self.stream = model_options.get("stream", True)
-        
         client_kwargs = {"api_key": model_options["api_key"]}
         if "base_url" in model_options:
             client_kwargs["base_url"] = model_options["base_url"]
-        self.client = AsyncOpenAI(**client_kwargs)
+        self.client = ClientLLMSDK(injectedLLM, client_kwargs)
         self.system_prompt = system_prompt
         self.system_apply_to_all_prompts = system_apply_to_all_prompts
         self.final_result_placeholder = final_result_placeholder or "final_result"
@@ -91,7 +88,15 @@ class TasksPromptsChain:
         self._output_template = None
         self._final_output_template = None
         self._current_stream_buffer = ""
-
+    
+    def get_reflection(self):
+        """
+        Get the reflection of the class instance.
+        
+        Returns:
+            str: The string representation of the class instance
+        """
+        return self.AsyncLLmAi
     def set_output_template(self, template: str) -> None:
         """
         Set the output template to be used for streaming responses.
@@ -121,7 +126,7 @@ class TasksPromptsChain:
         self._final_output_template=output
         return output
 
-    async def execute_chain(self, prompts: List[Union[Dict, PromptTemplate]]) -> AsyncGenerator[str, None]:
+    async def execute_chain(self, prompts: List[Union[Dict, PromptTemplate]], streamout = True) -> AsyncGenerator[str, None]:
         """
         Execute a chain of prompts sequentially, with placeholder replacement.
         
@@ -163,22 +168,23 @@ class TasksPromptsChain:
                 messages = []
                 if self.system_prompt and (i == 0 or self.system_apply_to_all_prompts):
                     messages.append({"role": "system", "content": self.system_prompt})
+
                 messages.append({"role": "user", "content": current_prompt + format_instruction})
                 
-                stream = await self.client.chat.completions.create(
+                streamResponse = self.client.generat_response(
                     model=self.model,
                     messages=messages,
                     temperature=self.temperature,
                     max_tokens=self.max_tokens,
-                    stream=self.stream
+                    stream=True
                 )
                 
                 response_content = ""
                 self._current_stream_buffer = ""
                 
-                async for chunk in stream:
-                    if chunk.choices[0].delta.content is not None:
-                        delta = chunk.choices[0].delta.content
+                async for chunk in streamResponse:
+                    if chunk is not None:
+                        delta = chunk
                         response_content += delta
                         self._current_stream_buffer = response_content
                         self._format_current_stream()
@@ -187,7 +193,8 @@ class TasksPromptsChain:
                         if prompt_template.output_placeholder:
                             placeholder_values[prompt_template.output_placeholder] = response_content
                             self._results[prompt_template.output_placeholder] = response_content
-                        yield delta                
+                        if streamout:
+                            yield delta            
 
         except Exception as e:
             raise Exception(f"Error in prompt chain execution at prompt {i}: {str(e)}")
@@ -195,6 +202,7 @@ class TasksPromptsChain:
         # Store the last response with the final result placeholder
         if responses:
             self._results[self.final_result_placeholder] = responses[-1]
+            yield "<tasks-sys>Done</tasks-sys>"
 
     def get_result(self, placeholder: str) -> Optional[str]:
         """
