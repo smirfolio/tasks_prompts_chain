@@ -74,6 +74,18 @@ class ClientLLMSDK:
                     yield chunk.delta.text
                 elif chunk.type == "content_block_stop":
                     pass
-
+        
+        elif self.llm_class_name == "AsyncCerebras":  # AsyncCerebras SDK
+            response = await self.client.chat.completions.create(
+                model=model,
+                messages=messages,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                stream=stream
+            )
+            
+            async for chunk in response:
+                if chunk.choices[0].delta.content is not None:
+                    yield chunk.choices[0].delta.content
         else:
             raise NotImplementedError(f"Unsupported LLM: {self.llm_class_name}")
