@@ -200,7 +200,7 @@ class TasksPromptsChain:
                 async for chunk in stream:
                     if not chunk.choices or not chunk.choices[0].delta or not chunk.choices[0].delta.content:
                         continue
-                    #if chunk.choices[0].delta.content is not None:
+
                     delta = chunk.choices[0].delta.content
                     response_content += delta
                     self._current_stream_buffer = response_content
