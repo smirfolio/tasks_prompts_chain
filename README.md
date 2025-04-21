@@ -196,6 +196,13 @@ Errors are raised with descriptive messages indicating the specific issue and pr
 4. Consider temperature settings based on your use case
 5. Use system prompts for consistent context
 
+## Compatible Models
+
+- Llama3.3
+- llama-4-scout
+- claude-3-7-sonnet-20250219 (Other claude version)
+- ChatGpt's
+
 ## License
 
 MIT License
