@@ -49,7 +49,7 @@ class ModelOptions(TypedDict, total=False):
 class PromptTemplate:
     def __init__(self, prompt: str, output_format: str = "TEXT", output_placeholder: Optional[str] = None):
         self.prompt = prompt
-        self.output_format = OutputFormat(output_format.upper())
+        self.output_format = OutputFormat(output_format.upper()).value
         self.output_placeholder = output_placeholder
 
 class TasksPromptsChain:
@@ -155,39 +155,62 @@ class TasksPromptsChain:
                 for placeholder, value in placeholder_values.items():
                     current_prompt = current_prompt.replace(f"{{{{{placeholder}}}}}", value)
 
+                wants_json_output = prompt_template.output_format == OutputFormat.JSON.value
                 # Format system message based on output format
                 format_instruction = ""
-                if prompt_template.output_format != OutputFormat.TEXT:
-                    format_instruction = f"\nPlease provide your response in {prompt_template.output_format.value} format."
+                if wants_json_output:
+                    format_instruction = f"\nPlease provide your response in {prompt_template.output_format}."                    
 
                 messages = []
                 if self.system_prompt and (i == 0 or self.system_apply_to_all_prompts):
                     messages.append({"role": "system", "content": self.system_prompt})
+                
                 messages.append({"role": "user", "content": current_prompt + format_instruction})
                 
-                stream = await self.client.chat.completions.create(
-                    model=self.model,
-                    messages=messages,
-                    temperature=self.temperature,
-                    max_tokens=self.max_tokens,
-                    stream=self.stream
-                )
+                # Default completition.create parameters
+                create_kwargs = {
+                    "model": self.model,
+                    "messages": messages,
+                    "temperature": self.temperature,
+                    "max_tokens": self.max_tokens,
+                    "stream": self.stream
+                }
+
+                # Check if used model is GPT 
+                is_gpt_model = self.model.lower().startswith("gpt")
+                # GPT model text = {"format" : {"type": "json_object"}}
+                if is_gpt_model and wants_json_output:
+                    create_kwargs["text"] = {
+                        "format": {
+                                "type": "json_object"
+                        }
+                    }
+
+                # Non Gpt model response_format={"type": "json_object|text"}
+                elif not is_gpt_model:
+                    create_kwargs["response_format"] = {
+                        "type": "json_object" if wants_json_output else "text"
+                    }
+
+                stream = await self.client.chat.completions.create(**create_kwargs)
                 
                 response_content = ""
                 self._current_stream_buffer = ""
                 
                 async for chunk in stream:
-                    if chunk.choices[0].delta.content is not None:
-                        delta = chunk.choices[0].delta.content
-                        response_content += delta
-                        self._current_stream_buffer = response_content
-                        self._format_current_stream()
-                        responses.append(response_content)
-                        # Store response with placeholder if specified
-                        if prompt_template.output_placeholder:
-                            placeholder_values[prompt_template.output_placeholder] = response_content
-                            self._results[prompt_template.output_placeholder] = response_content
-                        yield delta                
+                    if not chunk.choices or not chunk.choices[0].delta or not chunk.choices[0].delta.content:
+                        continue
+                    #if chunk.choices[0].delta.content is not None:
+                    delta = chunk.choices[0].delta.content
+                    response_content += delta
+                    self._current_stream_buffer = response_content
+                    self._format_current_stream()
+                    responses.append(response_content)
+                    # Store response with placeholder if specified
+                    if prompt_template.output_placeholder:
+                        placeholder_values[prompt_template.output_placeholder] = response_content
+                        self._results[prompt_template.output_placeholder] = response_content
+                    yield delta              
 
         except Exception as e:
             raise Exception(f"Error in prompt chain execution at prompt {i}: {str(e)}")
