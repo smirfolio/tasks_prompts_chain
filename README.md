@@ -9,6 +9,7 @@ A Mini Python library for creating and executing chains of prompts using multipl
 - Template-based output formatting
 - System prompt support
 - Placeholder replacement between prompts
+- Stop placeholder string, that can be defined, so if the LLM responds with this placeholder, the chain prompt will interrupt, as an LLM error handler
 - Multiple output formats (JSON, Markdown, CSV, Text)
 - Async/await support
 - Support for multiple LLM providers (OpenAI, Anthropic, Cerebras, etc.)
@@ -106,10 +107,11 @@ async def main():
     # Define your prompts - specify which LLM to use for each prompt
     prompts = [
         {
-            "prompt": "Create a design concept for a luxury chocolate bar",
+            "prompt": "Create a design concept for a luxury chocolate bar, if not inspired respond with this string %%cant_be_inspired%% so the chain prompt query will be stopped",
             "output_format": "TEXT",
             "output_placeholder": "design_concept",
-            "llm_id": "gpt"  # Use the GPT model for this prompt
+            "llm_id": "gpt",  # Use the GPT model for this prompt
+            "stop_placholder": "%%cant_be_inspired%%" # the stop placeholder string that will interrupt the prompt chain query
         },
         {
             "prompt": "Based on this concept: {{design_concept}}, suggest a color palette",
@@ -276,7 +278,8 @@ Each prompt in the chain can be defined as a dictionary:
     "prompt": str,              # The actual prompt text
     "output_format": str,       # "JSON", "MARKDOWN", "CSV", or "TEXT"
     "output_placeholder": str,  # Identifier for accessing this result
-    "llm_id": str               # Optional: ID of the LLM to use for this prompt
+    "llm_id": str,              # Optional: ID of the LLM to use for this prompt
+    "stop_placholder": str      # Optional: The stop string placeholder that may interrupt the chaining prompt query, defined in a prompt, and may be returned by the LLM
 }
 ```
 
@@ -297,6 +300,7 @@ The library includes comprehensive error handling:
 - API error handling
 - Placeholder validation
 - LLM validation (checks if specified LLM ID exists)
+- stop_placholder to validate the LLM output and stop the chain prompt excution
 
 Errors are raised with descriptive messages indicating the specific issue and prompt number where the error occurred.
 
@@ -304,6 +308,7 @@ Errors are raised with descriptive messages indicating the specific issue and pr
 
 1. Always set templates before executing the chain
 2. Use meaningful placeholder names
+3. Implement a stop_placholder in each prompt, to catch the LLM error defined bad responses to stop the subsequent requests
 3. Handle streaming responses appropriately
 4. Choose appropriate models for different types of tasks
 5. Use system prompts for consistent context

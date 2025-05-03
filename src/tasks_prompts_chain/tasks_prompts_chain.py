@@ -31,6 +31,7 @@ Copyright 2025 Samir Ben Sghaier - Smirfolio
 from typing import List, Optional, Dict, Union, AsyncGenerator, TypedDict
 from enum import Enum
 from .client_llm_sdk import ClientLLMSDK
+import json
 
 class OutputFormat(Enum):
     JSON = "JSON"
@@ -46,10 +47,12 @@ class ModelOptions(TypedDict, total=False):
     max_tokens: Optional[int]
 
 class PromptTemplate:
-    def __init__(self, prompt: str, output_format: str = "TEXT", output_placeholder: Optional[str] = None):
+    def __init__(self, prompt: str, output_format: str = "TEXT", output_placeholder: Optional[str] = None, llm_id: Optional[str] = None, stop_placeholder: Optional[str] = None):
         self.prompt = prompt
         self.output_format = OutputFormat(output_format.upper())
         self.output_placeholder = output_placeholder
+        self.llm_id=llm_id
+        self.stop_placeholder = stop_placeholder
 
 class TasksPromptsChain:
     """A utility class for creating and executing prompt chains using OpenAI's API."""
@@ -165,7 +168,8 @@ class TasksPromptsChain:
                                                             "prompt": str,
                                                             "output_format": str,
                                                             "output_placeholder": str,
-                                                            "llm_id": str  # Optional: Specifies which LLM to use
+                                                            "llm_id": str,  # Optional: Specifies which LLM to use
+                                                            "stop_placeholder": str  # Optional: The stop string placeholder
                                                         }
         Returns:
             AsyncGenerator[str, None]: Generator yielding response chunks
@@ -178,24 +182,22 @@ class TasksPromptsChain:
                 # Convert dict to PromptTemplate if necessary and extract llm_id
                 llm_id = None
                 if isinstance(prompt_data, dict):
-                    # Extract llm_id from the prompt data if present
-                    llm_id = prompt_data.get("llm_id", self.default_client_id)
                     prompt_template = PromptTemplate(
                         prompt=prompt_data["prompt"],
                         output_format=prompt_data.get("output_format", "TEXT"),
-                        output_placeholder=prompt_data.get("output_placeholder")
+                        output_placeholder=prompt_data.get("output_placeholder"),
+                        llm_id= prompt_data.get("llm_id", self.default_client_id),
+                        stop_placeholder=prompt_data.get("stop_placeholder", None)
                     )
                 else:
                     prompt_template = prompt_data
-                    # Use default client if llm_id not specified
-                    llm_id = self.default_client_id
                 
                 # Validate the requested LLM exists
-                if llm_id not in self.clients:
-                    raise ValueError(f"LLM with id '{llm_id}' not found. Available LLMs: {list(self.clients.keys())}")
+                if prompt_template.llm_id not in self.clients:
+                    raise ValueError(f"LLM with id '{prompt_template.llm_id}' not found. Available LLMs: {list(self.clients.keys())}")
                 
                 # Get the client configuration
-                client_config = self.clients[llm_id]
+                client_config = self.clients[prompt_template.llm_id]
                 client = client_config["client"]
                 model = client_config["model"]
                 temperature = client_config["temperature"]
@@ -241,7 +243,13 @@ class TasksPromptsChain:
                             placeholder_values[prompt_template.output_placeholder] = response_content
                             self._results[prompt_template.output_placeholder] = response_content
                         if streamout:
-                            yield delta            
+                            yield delta
+                
+                # Stop excution if the stop_placeholder is detected in the response content
+                if prompt_template.stop_placeholder and (prompt_template.stop_placeholder in response_content):
+                    raise Exception({"type": "error", "content": "Invalid project description. Please provide a valid project description."})
+                    #yield json.dumps({"type": "error", "content": "Invalid project description. Please provide a valid project description."})
+                    #return          
 
         except Exception as e:
             raise Exception(f"Error in prompt chain execution at prompt {i}: {str(e)}")
@@ -285,4 +293,3 @@ class TasksPromptsChain:
         if len(self._results) > 0:
             raise Exception("template_output must be called before execute_chain")
         self.set_output_template(template)
-
