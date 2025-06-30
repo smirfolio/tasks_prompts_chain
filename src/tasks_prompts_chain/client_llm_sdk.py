@@ -1,3 +1,5 @@
+from typing import  Optional
+
 class ClientLLMSDK:
     """
     A class to handle LLM SDKs for various providers.
@@ -17,6 +19,25 @@ class ClientLLMSDK:
             client_kwargs["base_url"] = model_options["base_url"]
          # Instantiate the LLM
         self.client = AsyncLLmAi(**client_kwargs)
+
+    def _extract_content(self, chunk) -> Optional[str]:
+        """Extract content from different response formats"""
+        if self.llm_class_name == "AsyncAnthropic":
+            # Handle different Anthropic event types
+            if hasattr(chunk, 'type'):
+                if chunk.type == 'content_block_delta':
+                    return chunk.delta.text
+                elif chunk.type == 'message_stop':
+                    return None
+            return None
+        else:
+            # Handle OpenAI and other formats
+            if hasattr(chunk, 'choices') and chunk.choices:
+                if hasattr(chunk.choices[0], 'delta'):
+                    return chunk.choices[0].delta.content
+                elif hasattr(chunk.choices[0], 'message'):
+                    return chunk.choices[0].message.content
+        return None
 
     async def generat_response(self, **kwargs):
         """
@@ -42,8 +63,14 @@ class ClientLLMSDK:
             )
             
             async for chunk in response:
-                if chunk.choices[0].delta.content is not None:
-                    yield chunk.choices[0].delta.content
+                if chunk is not None:
+                   if isinstance(chunk, str):
+                            delta = chunk
+                   else:
+                       # Handle different response formats
+                       delta = self._extract_content(chunk)
+                if delta is not None:
+                    yield delta
                 
 
         elif self.llm_class_name == "AsyncAnthropic":  # Anthropic SDK
@@ -69,11 +96,14 @@ class ClientLLMSDK:
             )
             
             async for chunk in response:
-                # Based on the observed output format: RawContentBlockDeltaEvent with TextDelta
-                if chunk.type == "content_block_delta" and hasattr(chunk.delta, "text"):
-                    yield chunk.delta.text
-                elif chunk.type == "content_block_stop":
-                    pass
+                if chunk is not None:
+                   if isinstance(chunk, str):
+                            delta = chunk
+                   else:
+                       # Handle different response formats
+                       delta = self._extract_content(chunk)
+                if delta is not None:
+                    yield delta
         
         elif self.llm_class_name == "AsyncCerebras":  # AsyncCerebras SDK
             response = await self.client.chat.completions.create(

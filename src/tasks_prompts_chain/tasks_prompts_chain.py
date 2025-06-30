@@ -234,6 +234,8 @@ class TasksPromptsChain:
                 async for chunk in streamResponse:
                     if chunk is not None:
                         delta = chunk
+                    if delta:
+                        delta = chunk
                         response_content += delta
                         self._current_stream_buffer = response_content
                         self._format_current_stream()
