@@ -1,4 +1,5 @@
 # TasksPromptsChain
+[![PyPI Downloads](https://static.pepy.tech/badge/tasks-prompts-chain)](https://pepy.tech/projects/tasks-prompts-chain)
 
 A Mini Python library for creating and executing chains of prompts using multiple LLM providers with streaming support and output template formatting.
 
