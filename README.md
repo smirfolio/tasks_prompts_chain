@@ -579,7 +579,7 @@ git push origin feature/your-feature-name
 
 ## Release Notes
 
-### Unreleased - Reasoning effort passthrough
+### 0.2.1 - Reasoning effort passthrough
 
 - Added optional `model_options["reasoning_effort"]` support. The value is
   forwarded to `chat.completions.create` for OpenAI-compatible and Cerebras

@@ -2,7 +2,7 @@
 
 All notable changes to `tasks_prompts_chain` are documented in this file.
 
-## [Unreleased]
+## [0.2.1] - 2026-11-22
 
 ### Added
 
