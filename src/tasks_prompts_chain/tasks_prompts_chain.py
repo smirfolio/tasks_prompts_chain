@@ -158,7 +158,11 @@ class TasksPromptsChain:
                 "model": model_options.get("model", "gpt-3.5-turbo"),
                 "temperature": model_options.get("temperature", 0.7),
                 "max_tokens": model_options.get("max_tokens", 4120),
-                "client": ClientLLMSDK(llm_class, client_kwargs)
+                "client": ClientLLMSDK(
+                    llm_class,
+                    client_kwargs,
+                    request_options=model_options,
+                )
             }
         self.system_prompt = system_prompt
         self.system_apply_to_all_prompts = system_apply_to_all_prompts
