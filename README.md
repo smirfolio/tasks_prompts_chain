@@ -15,6 +15,7 @@ A Mini Python library for creating and executing chains of prompts using multipl
 - Async/await support
 - Support for multiple LLM providers (OpenAI, Anthropic, Cerebras, etc.)
 - Multi-model support - use different models for different prompts in the chain
+- Observer / usage telemetry with per-prompt metadata and normalized token usage
 
 ## Dependencies
 
@@ -112,7 +113,7 @@ async def main():
             "output_format": "TEXT",
             "output_placeholder": "design_concept",
             "llm_id": "gpt",  # Use the GPT model for this prompt
-            "stop_placholder": "%%cant_be_inspired%%" # the stop placeholder string that will interrupt the prompt chain query
+            "stop_placeholder": "%%cant_be_inspired%%" # the stop placeholder string that will interrupt the prompt chain query
         },
         {
             "prompt": "Based on this concept: {{design_concept}}, suggest a color palette",
@@ -238,6 +239,117 @@ print(chain.get_final_result_within_template())
 ```
 
 
+## Observer / usage telemetry
+
+Attach a synchronous observer to receive structured timing and token usage for
+every prompt and for the whole chain. No wrapping or monkey-patching of the
+provider SDK is required.
+
+```python
+from tasks_prompts_chain import TasksPromptsChain, EVENT_PROMPT_END, EVENT_CHAIN_END
+
+
+def observer(event):
+    if event.type == EVENT_PROMPT_END:
+        print(
+            event.prompt_index,
+            event.output_placeholder,
+            event.metadata.get("request_kind"),
+            event.usage.prompt_tokens,
+            event.usage.completion_tokens,
+            event.duration_ms,
+            event.first_token_ms,
+        )
+    elif event.type == EVENT_CHAIN_END:
+        print("chain total", event.usage)
+
+
+async def main():
+    chain = TasksPromptsChain(
+        llm_configs,
+        observer=observer,
+        # include_usage defaults to True when an observer is set
+    )
+
+    async for chunk in chain.execute_chain(
+        [
+            {
+                "prompt": "List the key features.",
+                "output_placeholder": "key_features",
+                "metadata": {"request_kind": "key_feature"},
+            },
+        ]
+    ):
+        print(chunk, end="", flush=True)
+```
+
+### Event types
+
+| Event | When | `prompt_index` |
+|---|---|---|
+| `prompt_end` | Once per prompt, after success or failure | 1-based prompt number |
+| `chain_end` | Once per `execute_chain` call, in a `finally` | `prompt_count` |
+
+`chain_end` usage is an aggregate of the successful prompt usages. Use the
+`prompt_end` events when per-prompt granularity is needed. Every `execute_chain`
+call produces a fresh set of events, including calls made by an outer retry
+loop.
+
+### `ChainEvent` fields
+
+| Field | Description |
+|---|---|
+| `type` | `"prompt_end"` or `"chain_end"` |
+| `prompt_index` | 1-based prompt number; equals `prompt_count` for `chain_end` |
+| `prompt_count` | Number of prompts in the chain |
+| `output_placeholder` | Prompt output placeholder (`final_result_placeholder` for `chain_end`) |
+| `llm_id` | LLM configuration ID (`None` for `chain_end`) |
+| `model` | Model name (`None` for `chain_end`) |
+| `metadata` | Copy of the per-prompt metadata (`{}` for `chain_end`) |
+| `outcome` | `"ok"` or `"error"` |
+| `started_at` / `ended_at` | Timezone-aware UTC timestamps |
+| `duration_ms` | Wall-clock duration in milliseconds |
+| `first_token_ms` | Time to first non-empty text delta, or `None` |
+| `usage` | Normalized `TokenUsage` |
+| `response_chars` | Number of response characters (no response text is included) |
+| `final_result_placeholder` | Configured final result placeholder |
+| `error` / `error_type` | Original exception and its class name on failure |
+
+Events never contain prompt text, response text, messages, API keys, or
+provider URLs.
+
+### `TokenUsage` fields
+
+| Field | Description |
+|---|---|
+| `prompt_tokens` | Input tokens |
+| `completion_tokens` | Output tokens |
+| `total_tokens` | Total tokens (derived when the provider omits it) |
+| `cached_tokens` | Cached input tokens, when reported |
+| `reasoning_tokens` | Reasoning tokens, when reported |
+| `source` | `"provider"` when a usage payload was received, otherwise `"missing"` |
+
+### Usage request behavior
+
+- With an observer, the chain requests
+  `stream_options={"include_usage": True}` from OpenAI-compatible providers.
+- Pass `include_usage=False` to keep the original request shape and receive
+  events with `usage.source == "missing"` (unless the provider sends usage
+  anyway).
+- Pass `include_usage=True` without an observer to capture usage internally.
+- Anthropic's native SDK does not accept `stream_options`; usage is captured
+  when its event stream reports it.
+- If an OpenAI-compatible endpoint rejects `stream_options` with a 400/422
+  error naming the parameter, the request is retried once without it.
+
+### Important: keep the observer fast
+
+The observer is **synchronous** and runs inline in the event loop. It must be
+fast and non-blocking. If you need to perform I/O (writing logs to a database,
+sending an HTTP request, etc.), enqueue the event and process it elsewhere.
+Exceptions raised by the observer are swallowed, so telemetry failures can
+never break the prompt chain.
+
 ## API Reference
 
 ### TasksPromptsChain Class
@@ -256,6 +368,8 @@ print(chain.get_final_result_within_template())
 - `system_prompt` (Optional[str]): System prompt for context
 - `final_result_placeholder` (str): Name for the final result placeholder
 - `system_apply_to_all_prompts` (Optional[bool]): Apply system prompt to all prompts
+- `observer` (Optional[Callable[[ChainEvent], None]]): Synchronous observer called with `prompt_end` and `chain_end` events. Must be fast and non-blocking; exceptions are swallowed.
+- `include_usage` (Optional[bool]): Request provider token usage. Defaults to `True` when `observer` is set, otherwise `False`.
 
 #### Methods
 
@@ -280,9 +394,27 @@ Each prompt in the chain can be defined as a dictionary:
     "output_format": str,       # "JSON", "MARKDOWN", "CSV", or "TEXT"
     "output_placeholder": str,  # Identifier for accessing this result
     "llm_id": str,              # Optional: ID of the LLM to use for this prompt
-    "stop_placholder": str      # Optional: The stop string placeholder that may interrupt the chaining prompt query, defined in a prompt, and may be returned by the LLM
+    "stop_placeholder": str,    # Optional: The stop string placeholder that may interrupt the chaining prompt query, defined in a prompt, and may be returned by the LLM
+    "metadata": dict            # Optional: per-prompt metadata copied into observer events
 }
 ```
+
+`PromptTemplate` accepts the same values as keyword arguments, including the
+optional `metadata` argument:
+
+```python
+from tasks_prompts_chain import PromptTemplate
+
+prompt = PromptTemplate(
+    prompt="Extract the core requirements.",
+    output_format="JSON",
+    output_placeholder="core_requirements",
+    llm_id="gpt",
+    metadata={"request_kind": "core_requirements"},
+)
+```
+
+Invalid (non-dict) metadata is treated as an empty dict instead of raising.
 
 ## Supported LLM Providers
 
@@ -301,7 +433,7 @@ The library includes comprehensive error handling:
 - API error handling
 - Placeholder validation
 - LLM validation (checks if specified LLM ID exists)
-- stop_placholder to validate the LLM output and stop the chain prompt excution
+- stop_placeholder to validate the LLM output and stop the chain prompt execution
 
 Errors are raised with descriptive messages indicating the specific issue and prompt number where the error occurred.
 
@@ -309,7 +441,7 @@ Errors are raised with descriptive messages indicating the specific issue and pr
 
 1. Always set templates before executing the chain
 2. Use meaningful placeholder names
-3. Implement a stop_placholder in each prompt, to catch the LLM error defined bad responses to stop the subsequent requests
+3. Implement a stop_placeholder in each prompt, to catch the LLM error defined bad responses to stop the subsequent requests
 3. Handle streaming responses appropriately
 4. Choose appropriate models for different types of tasks
 5. Use system prompts for consistent context
@@ -382,6 +514,20 @@ git push origin feature/your-feature-name
     - Once approved, your contribution will be merged!
 
 ## Release Notes
+
+### 0.2.0 - Observer and usage telemetry
+
+- Added the `observer` callback and `prompt_end` / `chain_end` events
+- Added per-prompt `metadata` (dict prompts and `PromptTemplate`)
+- Added normalized `TokenUsage` with provider-reported prompt, completion,
+  total, cached, and reasoning tokens
+- Added `include_usage` and provider `stream_options` support, with a safe
+  one-time fallback when a provider rejects the parameter
+- Added `ClientLLMSDK.get_last_usage()`
+- Added `ChainEvent`, `TokenUsage`, `EVENT_PROMPT_END`, and `EVENT_CHAIN_END`
+  exports
+- All existing behavior, output chunks, sentinel, and error messages are
+  preserved; no new runtime dependencies
 
 ### 0.1.0 - Breaking Changes
 
