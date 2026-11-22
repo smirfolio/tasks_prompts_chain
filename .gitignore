@@ -1,0 +1,9 @@
+.venv/
+tasks_chain/
+dist/
+build/
+*.egg-info/
+__pycache__/
+.pytest_cache/
+.coverage
+uv.lock
