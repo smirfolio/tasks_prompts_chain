@@ -122,12 +122,14 @@ class ClientLLMSDK:
     This class is designed to work with different LLM SDKs by
     dynamically loading the appropriate class based on the provider.
     """
-    def __init__(self, AsyncLLmAi, model_options):
+    def __init__(self, AsyncLLmAi, model_options, request_options=None):
         """
         Initialize with any LLM SDK class.
 
         :param llm_class: The LLM class to be used (e.g., openai.AsyncOpenAI, anthropic.AsyncAnthropic)
         :param kwargs: Additional parameters for initializing the LLM instance
+        :param request_options: Optional request-level options (e.g.
+            ``reasoning_effort``) kept separate from client constructor kwargs.
         """
         self.llm_class_name = AsyncLLmAi.__name__  # Store the class type
         client_kwargs = {"api_key": model_options["api_key"]}
@@ -135,6 +137,11 @@ class ClientLLMSDK:
             client_kwargs["base_url"] = model_options["base_url"]
          # Instantiate the LLM
         self.client = AsyncLLmAi(**client_kwargs)
+        # Optional OpenAI-compatible thinking control. The caller includes
+        # this only for models whose provider advertises thinking support.
+        self.reasoning_effort = (request_options or {}).get(
+            "reasoning_effort"
+        ) or model_options.get("reasoning_effort")
         self.last_usage = TokenUsage(source="missing")
         self.last_raw_usage = None
 
@@ -202,6 +209,8 @@ class ClientLLMSDK:
             )
             if stream_options is not None:
                 create_kwargs["stream_options"] = stream_options
+            if self.reasoning_effort:
+                create_kwargs["reasoning_effort"] = self.reasoning_effort
 
             try:
                 response = await self.client.chat.completions.create(**create_kwargs)
@@ -274,6 +283,8 @@ class ClientLLMSDK:
             )
             if stream_options is not None:
                 create_kwargs["stream_options"] = stream_options
+            if self.reasoning_effort:
+                create_kwargs["reasoning_effort"] = self.reasoning_effort
 
             try:
                 response = await self.client.chat.completions.create(**create_kwargs)

@@ -16,6 +16,7 @@ A Mini Python library for creating and executing chains of prompts using multipl
 - Support for multiple LLM providers (OpenAI, Anthropic, Cerebras, etc.)
 - Multi-model support - use different models for different prompts in the chain
 - Observer / usage telemetry with per-prompt metadata and normalized token usage
+- Optional reasoning/thinking effort passthrough (`reasoning_effort`) for OpenAI-compatible and Cerebras models
 
 ## Dependencies
 
@@ -211,6 +212,65 @@ chain = TasksPromptsChain(
 )
 ```
 
+### Using Reasoning / Thinking Effort
+
+Models that expose a reasoning/thinking mode accept an optional
+`reasoning_effort` entry in `model_options`. It is forwarded to
+`chat.completions.create(...)` for OpenAI-compatible and Cerebras clients.
+The option is omitted when unset, so existing configurations are unchanged.
+
+```python
+llm_configs = [
+    {
+        "llm_id": "openai-reasoning",
+        "llm_class": AsyncOpenAI,
+        "model_options": {
+            "model": "o3-mini",
+            "api_key": "your-openai-api-key",
+            "temperature": 0.1,
+            "max_tokens": 8192,
+            "reasoning_effort": "medium",  # e.g. low / medium / high
+        }
+    }
+]
+
+chain = TasksPromptsChain(
+    llm_configs,
+    final_result_placeholder="result",
+)
+```
+
+For Ollama-compatible custom endpoints, use the exact levels returned by
+`POST /api/show` (`thinking.values`) for that model — for example `"off"`,
+`"low"`, `"high"`, `"max"`, or a model-specific value such as `"xhigh"`:
+
+```python
+llm_configs = [
+    {
+        "llm_id": "ollama-reasoning",
+        "llm_class": AsyncOpenAI,
+        "model_options": {
+            "model": "deepseek-v4.1-flash:1017",
+            "api_key": "your-ollama-api-key",
+            "base_url": "https://ollama.com/v1",
+            "temperature": 0.1,
+            "max_tokens": 8192,
+            "reasoning_effort": "high",
+        }
+    }
+]
+```
+
+Notes:
+
+- Named levels are passed through exactly as provided; `"off"`/`"none"` is
+  used by Ollama-compatible providers to disable thinking.
+- Thinking tokens count against `max_tokens`, so leave enough headroom.
+- Anthropic's native SDK branch does not accept `reasoning_effort`; the option
+  is intentionally not forwarded there.
+- When constructing `ClientLLMSDK` directly, the option can also be supplied as
+  `ClientLLMSDK(..., request_options={"reasoning_effort": "high"})`.
+
 ### Using Templates
 
 You must call this set method before the execution of the prompting query (chain.execute_chain(prompts))
@@ -365,6 +425,10 @@ never break the prompt chain.
     - `temperature` (float): Temperature setting for response generation
     - `max_tokens` (int): Maximum tokens in generated responses
     - `base_url` (Optional[str]): Custom API endpoint URL
+    - `reasoning_effort` (Optional[str]): Provider-specific thinking level
+      (for example `low`, `medium`, `high`, `max`, `xhigh`). Forwarded to
+      `chat.completions.create` for OpenAI-compatible and Cerebras clients;
+      omitted when unset. Anthropic's native SDK branch does not forward it.
 - `system_prompt` (Optional[str]): System prompt for context
 - `final_result_placeholder` (str): Name for the final result placeholder
 - `system_apply_to_all_prompts` (Optional[bool]): Apply system prompt to all prompts
@@ -514,6 +578,17 @@ git push origin feature/your-feature-name
     - Once approved, your contribution will be merged!
 
 ## Release Notes
+
+### 0.2.1 - Reasoning effort passthrough
+
+- Added optional `model_options["reasoning_effort"]` support. The value is
+  forwarded to `chat.completions.create` for OpenAI-compatible and Cerebras
+  providers; omitted when unset, so existing chains are unchanged.
+- `ClientLLMSDK` accepts an optional `request_options` argument, and
+  `TasksPromptsChain` passes its `model_options` through that path.
+- Anthropic's native SDK branch is unchanged and does not forward the option.
+- Added `tests/test_reasoning_effort.py` for forwarding, omission, Cerebras,
+  and chain-constructor coverage.
 
 ### 0.2.0 - Observer and usage telemetry
 

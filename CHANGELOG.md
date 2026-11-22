@@ -2,6 +2,22 @@
 
 All notable changes to `tasks_prompts_chain` are documented in this file.
 
+## [0.2.1] - 2026-11-22
+
+### Added
+
+- **Optional `reasoning_effort` request option**: `model_options` may now
+  include `reasoning_effort` (for example `"low"`, `"medium"`, `"high"`).
+  `ClientLLMSDK` forwards it on OpenAI-compatible and Cerebras
+  `chat.completions.create` calls. The option is optional and omitted when
+  absent, so existing callers send exactly the same requests as before.
+- `ClientLLMSDK` accepts an optional `request_options` argument so the chain
+  can carry request-level options separately from the client constructor
+  kwargs. Direct constructors may still pass `reasoning_effort` in
+  `model_options`.
+- `tests/test_reasoning_effort.py` covers OpenAI/Cerebras forwarding, the
+  omitted case, and the chain-constructor path.
+
 ## [0.2.0] - 2026-11-21
 
 ### Added
