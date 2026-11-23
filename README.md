@@ -76,7 +76,7 @@ async def main():
                 "model": "gpt-4o",
                 "api_key": "your-openai-api-key",
                 "temperature": 0.1,
-                "max_tokens": 4120,
+                "max_tokens": 6500,
             }
         },
         {
@@ -97,7 +97,7 @@ async def main():
                 "api_key": "your-cerebras-api-key",
                 "base_url": "https://api.cerebras.ai/v1",
                 "temperature": 0.1,
-                "max_tokens": 4120,
+                "max_tokens": 6500,
             }
         }
     ]
@@ -154,7 +154,7 @@ chain = TasksPromptsChain(
                 "model": "gpt-4o",
                 "api_key": "your-openai-api-key",
                 "temperature": 0.1,
-                "max_tokens": 4120,
+                "max_tokens": 6500,
             }
         }
     ],
@@ -178,7 +178,7 @@ llm_configs = [
             "api_key": "your-cerebras-api-key",
             "base_url": "https://api.cerebras.ai/v1",
             "temperature": 0.1,
-            "max_tokens": 4120,
+            "max_tokens": 6500,
         }
     }
 ]
@@ -201,7 +201,7 @@ llm_configs = [
             "api_key": "your-api-key",
             "base_url": "https://your-custom-endpoint.com/v1",
             "temperature": 0.1,
-            "max_tokens": 4120,
+            "max_tokens": 6500,
         }
     }
 ]
@@ -270,6 +270,53 @@ Notes:
   is intentionally not forwarded there.
 - When constructing `ClientLLMSDK` directly, the option can also be supplied as
   `ClientLLMSDK(..., request_options={"reasoning_effort": "high"})`.
+
+### `max_tokens` and `max_completion_tokens`
+
+> **Warning — deterministic token-limit selection**
+>
+> `tasks_prompts_chain` always sends a positive token limit. If `max_tokens`
+> is omitted, or passes `None`, `0`, or a negative number, the chain uses
+> **6500** as a compatibility fallback. 6500 is not a model-specific limit.
+>
+> The parameter is selected before the request; there is no error-driven
+> retry:
+>
+> - OpenAI SDK with no custom `base_url` (official OpenAI) uses
+>   `max_completion_tokens`.
+> - OpenAI SDK with a custom `base_url` (OpenAI-compatible endpoint) uses
+>   `max_tokens`.
+> - Anthropic native and Cerebras always use `max_tokens`.
+> - `model_options["max_tokens_parameter"]` explicitly overrides the OpenAI
+>   choice (`"max_tokens"` or `"max_completion_tokens"`).
+>
+> The chain never sends both parameters at once. Set the model's actual
+> maximum output; a value that is too low can truncate long JSON or Markdown
+> responses.
+
+For a recent OpenAI model that requires `max_completion_tokens`:
+
+```python
+model_options = {
+    "model": "o3-mini",
+    "api_key": "your-openai-api-key",
+    "max_completion_tokens": 8192,
+}
+```
+
+For an OpenAI-compatible endpoint that only supports `max_tokens`:
+
+```python
+model_options = {
+    "model": "my-compatible-model",
+    "api_key": "your-api-key",
+    "base_url": "https://provider.example.com/v1",
+    "max_tokens": 8192,  # selected automatically for a custom base_url
+}
+```
+
+If a proxy or Azure-style endpoint needs the other parameter, set
+`max_tokens_parameter` explicitly.
 
 ### Using Templates
 
@@ -423,7 +470,17 @@ never break the prompt chain.
     - `model` (str): The model identifier
     - `api_key` (str): Your API key for the LLM provider
     - `temperature` (float): Temperature setting for response generation
-    - `max_tokens` (int): Maximum tokens in generated responses
+    - `max_tokens` (int, optional): Maximum output tokens. Missing, `None`,
+      `0`, or negative values fall back to `6500`. Set the model's actual
+      maximum when it differs from the fallback.
+    - `max_completion_tokens` (int, optional): OpenAI-compatible output limit
+      for recent models. The OpenAI SDK uses this parameter for the official
+      OpenAI endpoint; custom OpenAI-compatible base URLs use `max_tokens`.
+      Anthropic and Cerebras ignore this option and always use `max_tokens`.
+    - `max_tokens_parameter` (str, optional): Explicit override, either
+      `"max_tokens"` or `"max_completion_tokens"`. Useful for OpenAI-compatible
+      proxies or Azure-style endpoints. Non-OpenAI SDKs always use
+      `max_tokens`.
     - `base_url` (Optional[str]): Custom API endpoint URL
     - `reasoning_effort` (Optional[str]): Provider-specific thinking level
       (for example `low`, `medium`, `high`, `max`, `xhigh`). Forwarded to
@@ -578,6 +635,21 @@ git push origin feature/your-feature-name
     - Once approved, your contribution will be merged!
 
 ## Release Notes
+
+### 0.2.2 - JSON mode, finish reasons, deterministic token limits
+
+- Added optional `response_format` forwarding for OpenAI-compatible and
+  Cerebras prompts. `json_schema` downgrades to `json_object` once, then JSON
+  mode is omitted if the provider still rejects it.
+- Added finish-reason access through `get_last_finish_reason()`,
+  `get_finish_reason(placeholder)`, and `ChainEvent.finish_reason`.
+- Token limits are now selected before the request: `max_completion_tokens`
+  for the official OpenAI endpoint, `max_tokens` for custom OpenAI-compatible
+  endpoints, Anthropic, and Cerebras.
+- Added the `max_tokens_parameter` override and a 6500 fallback for missing,
+  `None`, `0`, or negative limits.
+- Removed error-driven token-parameter retries. Existing `max_tokens`
+  configurations remain compatible; no new runtime dependencies.
 
 ### 0.2.1 - Reasoning effort passthrough
 

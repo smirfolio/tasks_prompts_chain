@@ -12,6 +12,13 @@ def _get(obj, name):
     return getattr(obj, name, None)
 
 
+#: Compatibility fallback used when the caller does not provide a positive
+#: ``max_tokens``. The chain always sends this value so providers never see
+#: ``max_tokens=0`` or ``None``. Callers should set the model's actual maximum
+#: output when it differs from this fallback.
+DEFAULT_MAX_TOKENS = 6500
+
+
 def _as_int(value):
     if value is None:
         return None
@@ -19,6 +26,12 @@ def _as_int(value):
         return int(value)
     except (TypeError, ValueError, OverflowError):
         return None
+
+
+def _positive_int(value) -> Optional[int]:
+    """Return an int > 0, or None for unset/invalid/non-positive values."""
+    parsed = _as_int(value)
+    return parsed if parsed is not None and parsed > 0 else None
 
 
 def _normalize_usage(raw) -> TokenUsage:
@@ -170,9 +183,12 @@ class ClientLLMSDK:
             client_kwargs["base_url"] = model_options["base_url"]
          # Instantiate the LLM
         self.client = AsyncLLmAi(**client_kwargs)
+        # Keep the full request options so the token-limit parameter can be
+        # selected deterministically from the SDK class and base URL.
+        self.request_options = request_options or {}
         # Optional OpenAI-compatible thinking control. The caller includes
         # this only for models whose provider advertises thinking support.
-        self.reasoning_effort = (request_options or {}).get(
+        self.reasoning_effort = self.request_options.get(
             "reasoning_effort"
         ) or model_options.get("reasoning_effort")
         self.last_usage = TokenUsage(source="missing")
@@ -189,6 +205,32 @@ class ClientLLMSDK:
     def get_last_finish_reason(self) -> Optional[str]:
         """Return the provider finish reason for the most recent call."""
         return self.last_finish_reason
+
+    def _select_token_parameter(self) -> str:
+        """Choose the token-limit parameter before the request is sent.
+
+        No guessing and no retry:
+
+        - Anthropic native and Cerebras always use ``max_tokens``.
+        - The OpenAI SDK uses ``max_completion_tokens`` for the official
+          OpenAI endpoint (no custom ``base_url``).
+        - An OpenAI SDK pointed at a custom base URL uses ``max_tokens``,
+          preserving compatibility with OpenAI-compatible providers.
+        - ``model_options["max_tokens_parameter"]`` explicitly overrides the
+          OpenAI choice when a proxy or Azure-style endpoint needs the other
+          parameter.
+        """
+        if self.llm_class_name != "AsyncOpenAI":
+            return "max_tokens"
+
+        explicit = self.request_options.get("max_tokens_parameter")
+        if explicit in ("max_tokens", "max_completion_tokens"):
+            return explicit
+
+        base_url = self.request_options.get("base_url") or ""
+        if not base_url or str(base_url).startswith("https://api.openai.com"):
+            return "max_completion_tokens"
+        return "max_tokens"
 
     def _extract_content(self, chunk) -> Optional[str]:
         """Extract content from different response formats"""
@@ -240,12 +282,14 @@ class ClientLLMSDK:
     async def _create_with_fallbacks(self, create_kwargs):
         """Create a chat completion, shedding unsupported optional params.
 
-        ``response_format`` and ``stream_options`` are both optional. A
-        provider that rejects either gets one retry without the offending
-        parameter. A rejected ``json_schema`` is downgraded to
-        ``json_object`` once before being dropped entirely. These are
-        pre-generation 400/422 rejections, so the retries cannot double-bill
-        tokens.
+        ``response_format`` and ``stream_options`` are optional. A provider
+        that rejects either gets one retry without the offending parameter. A
+        rejected ``json_schema`` is downgraded to ``json_object`` once before
+        being dropped entirely. These are pre-generation 400/422 rejections,
+        so the retries cannot double-bill tokens.
+
+        The token-limit parameter is selected before this call; this helper
+        does not retry or negotiate ``max_tokens``/``max_completion_tokens``.
         """
         while True:
             try:
@@ -284,7 +328,10 @@ class ClientLLMSDK:
         model = kwargs.get("model", "gpt-4")
         messages= kwargs.get("messages", [])
         temperature = kwargs.get("temperature", 0.7)
-        max_tokens = kwargs.get("max_tokens", 512)
+        max_tokens = _positive_int(kwargs.get("max_tokens")) or DEFAULT_MAX_TOKENS
+        max_completion_tokens = _positive_int(
+            kwargs.get("max_completion_tokens")
+        )
         stream = kwargs.get("stream", True)
         stream_options = kwargs.get("stream_options")
         response_format = kwargs.get("response_format")
@@ -299,7 +346,6 @@ class ClientLLMSDK:
                 model=model,
                 messages=messages,
                 temperature=temperature,
-                max_tokens=max_tokens,
                 stream=stream,
             )
             if stream_options is not None:
@@ -311,6 +357,13 @@ class ClientLLMSDK:
                 and self._response_format_supported is not False
             ):
                 create_kwargs["response_format"] = response_format
+
+            token_parameter = self._select_token_parameter()
+            token_value = max_completion_tokens or max_tokens
+            if token_parameter == "max_completion_tokens":
+                create_kwargs["max_completion_tokens"] = token_value
+            else:
+                create_kwargs["max_tokens"] = token_value
 
             response = await self._create_with_fallbacks(create_kwargs)
 
@@ -370,7 +423,6 @@ class ClientLLMSDK:
                 model=model,
                 messages=messages,
                 temperature=temperature,
-                max_tokens=max_tokens,
                 stream=stream,
             )
             if stream_options is not None:
@@ -382,6 +434,10 @@ class ClientLLMSDK:
                 and self._response_format_supported is not False
             ):
                 create_kwargs["response_format"] = response_format
+
+            # Cerebras always uses max_tokens. max_completion_tokens is
+            # intentionally ignored for this SDK.
+            create_kwargs["max_tokens"] = max_tokens
 
             response = await self._create_with_fallbacks(create_kwargs)
 

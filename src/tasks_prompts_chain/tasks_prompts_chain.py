@@ -42,7 +42,11 @@ from typing import (
 )
 from enum import Enum
 
-from .client_llm_sdk import ClientLLMSDK
+from .client_llm_sdk import (
+    DEFAULT_MAX_TOKENS,
+    ClientLLMSDK,
+    _positive_int,
+)
 from .events import (
     ChainEvent,
     TokenUsage,
@@ -81,6 +85,8 @@ class ModelOptions(TypedDict, total=False):
     base_url: Optional[str]
     temperature: Optional[float]
     max_tokens: Optional[int]
+    max_completion_tokens: Optional[int]
+    max_tokens_parameter: Optional[str]
 
 class PromptTemplate:
     def __init__(self, prompt: str, output_format: str = "TEXT", output_placeholder: Optional[str] = None, llm_id: Optional[str] = None, stop_placeholder: Optional[str] = None, metadata: Optional[Dict[str, Any]] = None, response_format: Optional[Dict[str, Any]] = None):
@@ -119,7 +125,20 @@ class TasksPromptsChain:
                     - api_key (str): API key
                     - base_url (str, optional): Custom API endpoint URL
                     - temperature (float, optional): Temperature parameter (default: 0.7)
-                    - max_tokens (int, optional): Maximum tokens (default: 4120)
+                    - max_tokens (int, optional): Maximum output tokens.
+                      Missing, None, zero, and negative values fall back to
+                      6500 for every supported provider. Set the model's
+                      actual maximum when it differs from the fallback.
+                    - max_completion_tokens (int, optional): OpenAI-compatible
+                      output limit for recent models. The OpenAI SDK uses
+                      max_completion_tokens for the official OpenAI endpoint;
+                      custom OpenAI-compatible base URLs use max_tokens.
+                      Anthropic and Cerebras ignore this option and always
+                      use max_tokens.
+                    - max_tokens_parameter (str, optional): Explicit override,
+                      either "max_tokens" or "max_completion_tokens". Useful
+                      for OpenAI-compatible proxies or Azure-style endpoints.
+                      Non-OpenAI SDKs always use max_tokens.
             system_prompt (str, optional): System prompt to set context for the LLM
             final_result_placeholder (str, optional): The placeholder name for the final result
             system_apply_to_all_prompts (bool): Whether to apply system prompt to all prompts
@@ -161,7 +180,15 @@ class TasksPromptsChain:
                 "llm_id": llm_id,
                 "model": model_options.get("model", "gpt-3.5-turbo"),
                 "temperature": model_options.get("temperature", 0.7),
-                "max_tokens": model_options.get("max_tokens", 4120),
+                # Always store a positive value. Missing, None, zero, and
+                # negative inputs fall back to the compatibility default.
+                "max_tokens": (
+                    _positive_int(model_options.get("max_tokens"))
+                    or DEFAULT_MAX_TOKENS
+                ),
+                "max_completion_tokens": _positive_int(
+                    model_options.get("max_completion_tokens")
+                ),
                 "client": ClientLLMSDK(
                     llm_class,
                     client_kwargs,
@@ -305,6 +332,9 @@ class TasksPromptsChain:
                     model = client_config["model"]
                     temperature = client_config["temperature"]
                     max_tokens = client_config["max_tokens"]
+                    max_completion_tokens = client_config.get(
+                        "max_completion_tokens"
+                    )
 
                     # Replace placeholders in the prompt
                     current_prompt = prompt_template.prompt
@@ -344,6 +374,7 @@ class TasksPromptsChain:
                         messages=messages,
                         temperature=temperature,
                         max_tokens=max_tokens,
+                        max_completion_tokens=max_completion_tokens,
                         stream=True,
                         stream_options={"include_usage": True} if self.include_usage else None,
                         response_format=prompt_response_format,
