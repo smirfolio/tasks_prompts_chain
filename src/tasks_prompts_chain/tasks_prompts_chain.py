@@ -83,12 +83,16 @@ class ModelOptions(TypedDict, total=False):
     max_tokens: Optional[int]
 
 class PromptTemplate:
-    def __init__(self, prompt: str, output_format: str = "TEXT", output_placeholder: Optional[str] = None, llm_id: Optional[str] = None, stop_placeholder: Optional[str] = None, metadata: Optional[Dict[str, Any]] = None):
+    def __init__(self, prompt: str, output_format: str = "TEXT", output_placeholder: Optional[str] = None, llm_id: Optional[str] = None, stop_placeholder: Optional[str] = None, metadata: Optional[Dict[str, Any]] = None, response_format: Optional[Dict[str, Any]] = None):
         self.prompt = prompt
         self.output_format = OutputFormat(output_format.upper())
         self.output_placeholder = output_placeholder
         self.llm_id=llm_id
         self.stop_placeholder = stop_placeholder
+        # Optional provider-level JSON mode parameter, forwarded verbatim to
+        # OpenAI-compatible clients. ``output_format`` remains the declarative
+        # prompt hint; this field is what actually constrains decoding.
+        self.response_format = response_format
         # Keep malformed metadata from breaking the chain; the observer gets
         # a fresh copy for every event.
         self.metadata = dict(metadata) if isinstance(metadata, dict) else {}
@@ -168,6 +172,7 @@ class TasksPromptsChain:
         self.system_apply_to_all_prompts = system_apply_to_all_prompts
         self.final_result_placeholder = final_result_placeholder or "final_result"
         self._results = {}
+        self._finish_reasons: Dict[str, Optional[str]] = {}
         self._output_template = None
         self._final_output_template = None
         self._current_stream_buffer = ""
@@ -267,6 +272,7 @@ class TasksPromptsChain:
                 prompt_template = None
                 client = None
                 model = None
+                finish_reason = None
 
                 try:
                     # Convert dict to PromptTemplate if necessary and extract llm_id
@@ -278,7 +284,8 @@ class TasksPromptsChain:
                             output_placeholder=prompt_data.get("output_placeholder"),
                             llm_id= prompt_data.get("llm_id", self.default_client_id),
                             stop_placeholder=prompt_data.get("stop_placeholder", None),
-                            metadata=prompt_data.get("metadata")
+                            metadata=prompt_data.get("metadata"),
+                            response_format=prompt_data.get("response_format"),
                         )
                     else:
                         prompt_template = prompt_data
@@ -286,6 +293,11 @@ class TasksPromptsChain:
                     # Validate the requested LLM exists
                     if prompt_template.llm_id not in self.clients:
                         raise ValueError(f"LLM with id '{prompt_template.llm_id}' not found. Available LLMs: {list(self.clients.keys())}")
+
+                    # Clear any stale finish reason from a prior attempt that
+                    # used the same placeholder (retries reuse placeholders).
+                    if prompt_template.output_placeholder:
+                        self._finish_reasons[prompt_template.output_placeholder] = None
 
                     # Get the client configuration
                     client_config = self.clients[prompt_template.llm_id]
@@ -299,10 +311,26 @@ class TasksPromptsChain:
                     for placeholder, value in placeholder_values.items():
                         current_prompt = current_prompt.replace(f"{{{{{placeholder}}}}}", value)
 
-                    # Format system message based on output format
+                    # Format system message based on output format.
+                    # ``output_format`` is the declarative prompt hint;
+                    # ``response_format`` is the provider-level JSON mode
+                    # parameter. The legacy suffix stays byte-identical unless
+                    # the caller opts into provider JSON mode.
+                    prompt_response_format = getattr(
+                        prompt_template, "response_format", None
+                    )
                     format_instruction = ""
                     if prompt_template.output_format != OutputFormat.TEXT:
                         format_instruction = f"\nPlease provide your response in {prompt_template.output_format.value} format."
+                    if (
+                        prompt_template.output_format == OutputFormat.JSON
+                        and prompt_response_format is not None
+                    ):
+                        format_instruction += (
+                            " Return only a single valid JSON value. "
+                            "Do not use markdown code fences. Do not add prose. "
+                            "Do not truncate the JSON; shorten the values if necessary."
+                        )
 
                     messages = []
                     if self.system_prompt and (i == 0 or self.system_apply_to_all_prompts):
@@ -317,7 +345,8 @@ class TasksPromptsChain:
                         temperature=temperature,
                         max_tokens=max_tokens,
                         stream=True,
-                        stream_options={"include_usage": True} if self.include_usage else None
+                        stream_options={"include_usage": True} if self.include_usage else None,
+                        response_format=prompt_response_format,
                     )
 
                     self._current_stream_buffer = ""
@@ -343,6 +372,9 @@ class TasksPromptsChain:
                         #yield json.dumps({"type": "error", "content": "Invalid project description. Please provide a valid project description."})
                         #return
 
+                    finish_reason = client.get_last_finish_reason()
+                    if prompt_template.output_placeholder:
+                        self._finish_reasons[prompt_template.output_placeholder] = finish_reason
                     prompt_usages.append(client.get_last_usage())
                 except Exception as exc:
                     prompt_outcome = "error"
@@ -382,6 +414,7 @@ class TasksPromptsChain:
                             final_result_placeholder=self.final_result_placeholder,
                             error=prompt_error,
                             error_type=type(prompt_error).__name__ if prompt_error else None,
+                            finish_reason=finish_reason,
                         )
                     )
 
@@ -434,6 +467,16 @@ class TasksPromptsChain:
             Optional[str]: The response for that placeholder if it exists, None otherwise
         """
         return self._results.get(placeholder)
+
+    def get_finish_reason(self, placeholder: str) -> Optional[str]:
+        """Return the provider finish reason for a prompt placeholder.
+
+        OpenAI-compatible providers report ``stop``, ``length``,
+        ``content_filter``, ``tool_calls``, etc. Anthropic reports
+        ``end_turn``, ``max_tokens``, ``stop_sequence``, etc. ``None`` means
+        the provider did not report one.
+        """
+        return self._finish_reasons.get(placeholder)
 
     def get_final_result_within_template(self) -> Optional[str]:
         """

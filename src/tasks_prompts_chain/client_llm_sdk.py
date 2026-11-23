@@ -104,6 +104,13 @@ def _is_stream_options_rejection(exc) -> bool:
         return False
 
     message = str(exc).lower()
+    # A JSON-mode rejection is handled by the response_format fallback, not
+    # here, even when the provider uses a generic "unknown parameter" phrase.
+    if any(
+        marker in message
+        for marker in ("response_format", "json_object", "json_schema")
+    ):
+        return False
     markers = (
         "stream_options",
         "include_usage",
@@ -112,6 +119,32 @@ def _is_stream_options_rejection(exc) -> bool:
         "unsupported parameter",
         "extra inputs",
         "unexpected keyword",
+    )
+    return any(marker in message for marker in markers)
+
+
+def _is_response_format_rejection(exc) -> bool:
+    """Return True for a 400/422 rejection caused by ``response_format``.
+
+    Keep the markers specific. A generic ``unknown parameter`` error may be
+    about ``reasoning_effort`` or ``stream_options``; treating it as a JSON
+    mode rejection would silently disable enforcement for unrelated reasons.
+    """
+    status_code = getattr(exc, "status_code", None)
+    if status_code is None:
+        status_code = getattr(getattr(exc, "response", None), "status_code", None)
+    if status_code not in (400, 422):
+        return False
+
+    message = str(exc).lower()
+    markers = (
+        "response_format",
+        "response format",
+        "json_object",
+        "json_schema",
+        "json mode",
+        "structured output",
+        "structured outputs",
     )
     return any(marker in message for marker in markers)
 
@@ -144,10 +177,18 @@ class ClientLLMSDK:
         ) or model_options.get("reasoning_effort")
         self.last_usage = TokenUsage(source="missing")
         self.last_raw_usage = None
+        # None = not probed yet, True = last response_format call succeeded,
+        # False = this provider rejected it; omit it on subsequent calls.
+        self._response_format_supported: Optional[bool] = None
+        self.last_finish_reason: Optional[str] = None
 
     def get_last_usage(self) -> TokenUsage:
         """Return the usage captured during the most recent generate call."""
         return self.last_usage
+
+    def get_last_finish_reason(self) -> Optional[str]:
+        """Return the provider finish reason for the most recent call."""
+        return self.last_finish_reason
 
     def _extract_content(self, chunk) -> Optional[str]:
         """Extract content from different response formats"""
@@ -180,6 +221,58 @@ class ClientLLMSDK:
                 self.last_usage, _normalize_usage(raw_usage)
             )
 
+    def _capture_finish_reason(self, chunk) -> None:
+        """Capture the provider finish/stop reason from a stream chunk."""
+        if self.llm_class_name == "AsyncAnthropic":
+            if _get(chunk, "type") == "message_delta":
+                stop_reason = _get(_get(chunk, "delta"), "stop_reason")
+                if stop_reason:
+                    self.last_finish_reason = stop_reason
+            return
+
+        choices = _get(chunk, "choices")
+        if not choices:
+            return
+        finish_reason = _get(choices[0], "finish_reason")
+        if finish_reason:
+            self.last_finish_reason = finish_reason
+
+    async def _create_with_fallbacks(self, create_kwargs):
+        """Create a chat completion, shedding unsupported optional params.
+
+        ``response_format`` and ``stream_options`` are both optional. A
+        provider that rejects either gets one retry without the offending
+        parameter. A rejected ``json_schema`` is downgraded to
+        ``json_object`` once before being dropped entirely. These are
+        pre-generation 400/422 rejections, so the retries cannot double-bill
+        tokens.
+        """
+        while True:
+            try:
+                response = await self.client.chat.completions.create(**create_kwargs)
+                if "response_format" in create_kwargs:
+                    self._response_format_supported = True
+                return response
+            except Exception as exc:
+                response_format = create_kwargs.get("response_format")
+                if (
+                    response_format is not None
+                    and _is_response_format_rejection(exc)
+                ):
+                    if response_format.get("type") == "json_schema":
+                        create_kwargs["response_format"] = {"type": "json_object"}
+                        continue
+                    create_kwargs.pop("response_format", None)
+                    self._response_format_supported = False
+                    continue
+                if (
+                    "stream_options" in create_kwargs
+                    and _is_stream_options_rejection(exc)
+                ):
+                    create_kwargs.pop("stream_options", None)
+                    continue
+                raise
+
     async def generat_response(self, **kwargs):
         """
         Generate a response from the LLM.
@@ -194,10 +287,12 @@ class ClientLLMSDK:
         max_tokens = kwargs.get("max_tokens", 512)
         stream = kwargs.get("stream", True)
         stream_options = kwargs.get("stream_options")
+        response_format = kwargs.get("response_format")
 
-        # Every call starts with a clean usage record.
+        # Every call starts with a clean usage and finish-reason record.
         self.last_usage = TokenUsage(source="missing")
         self.last_raw_usage = None
+        self.last_finish_reason = None
 
         if self.llm_class_name == "AsyncOpenAI":  # OpenAI SDK
             create_kwargs = dict(
@@ -211,22 +306,18 @@ class ClientLLMSDK:
                 create_kwargs["stream_options"] = stream_options
             if self.reasoning_effort:
                 create_kwargs["reasoning_effort"] = self.reasoning_effort
+            if (
+                response_format is not None
+                and self._response_format_supported is not False
+            ):
+                create_kwargs["response_format"] = response_format
 
-            try:
-                response = await self.client.chat.completions.create(**create_kwargs)
-            except Exception as exc:
-                if stream_options is not None and _is_stream_options_rejection(exc):
-                    # The first request was rejected before generation, so the
-                    # retry cannot double-bill. Providers that do not support
-                    # stream_options still work, just without usage.
-                    create_kwargs.pop("stream_options", None)
-                    response = await self.client.chat.completions.create(**create_kwargs)
-                else:
-                    raise
+            response = await self._create_with_fallbacks(create_kwargs)
 
             async for chunk in response:
                 delta = None
                 self._capture_usage(chunk)
+                self._capture_finish_reason(chunk)
                 if chunk is not None:
                    if isinstance(chunk, str):
                             delta = chunk
@@ -264,6 +355,7 @@ class ClientLLMSDK:
             async for chunk in response:
                 delta = None
                 self._capture_usage(chunk)
+                self._capture_finish_reason(chunk)
                 if chunk is not None:
                    if isinstance(chunk, str):
                             delta = chunk
@@ -285,19 +377,18 @@ class ClientLLMSDK:
                 create_kwargs["stream_options"] = stream_options
             if self.reasoning_effort:
                 create_kwargs["reasoning_effort"] = self.reasoning_effort
+            if (
+                response_format is not None
+                and self._response_format_supported is not False
+            ):
+                create_kwargs["response_format"] = response_format
 
-            try:
-                response = await self.client.chat.completions.create(**create_kwargs)
-            except Exception as exc:
-                if stream_options is not None and _is_stream_options_rejection(exc):
-                    create_kwargs.pop("stream_options", None)
-                    response = await self.client.chat.completions.create(**create_kwargs)
-                else:
-                    raise
+            response = await self._create_with_fallbacks(create_kwargs)
 
             async for chunk in response:
                 delta = None
                 self._capture_usage(chunk)
+                self._capture_finish_reason(chunk)
                 if chunk is not None:
                     if isinstance(chunk, str):
                         delta = chunk
