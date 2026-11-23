@@ -2,6 +2,65 @@
 
 All notable changes to `tasks_prompts_chain` are documented in this file.
 
+## [0.2.2] - 2026-11-23
+
+### Added
+
+- **Provider-level JSON output**: `PromptTemplate` and prompt dicts accept
+  `response_format`, forwarded to OpenAI-compatible and Cerebras
+  `chat.completions.create` calls. Anthropic’s native SDK ignores it. A
+  rejected `json_schema` is downgraded once to `json_object`; if
+  `response_format` is still unsupported, it is omitted for subsequent calls
+  on that client. These are pre-generation 400/422 rejections, so the retry
+  cannot double-bill tokens.
+- **Finish-reason visibility**:
+  `ClientLLMSDK.get_last_finish_reason()`,
+  `TasksPromptsChain.get_finish_reason(placeholder)`, and
+  `ChainEvent.finish_reason` expose values such as `stop`, `length`, and
+  `end_turn`, so callers can distinguish truncated output from malformed
+  output.
+- **Deterministic token-limit selection**: the chain chooses the request
+  parameter before sending the request:
+  - OpenAI SDK + official OpenAI endpoint → `max_completion_tokens`;
+  - OpenAI SDK + custom base URL → `max_tokens`;
+  - Anthropic native and Cerebras → `max_tokens`;
+  - `model_options["max_tokens_parameter"]` explicitly overrides the OpenAI
+    choice with either `"max_tokens"` or `"max_completion_tokens"`.
+- **6500 compatibility fallback**: missing, `None`, `0`, and negative token
+  limits fall back to `6500`. The chain always sends a positive limit; 6500
+  is a compatibility fallback, not a model-specific maximum.
+- **Tests**: added coverage for JSON-mode forwarding and fallback,
+  `json_schema` downgrade, finish-reason exposure, deterministic token
+  parameter selection, the 6500 fallback, and the explicit
+  `max_tokens_parameter` override.
+- Deterministic `max_completion_tokens` support: the OpenAI SDK uses
+  `max_completion_tokens` for the official OpenAI endpoint and `max_tokens`
+  for custom OpenAI-compatible base URLs. Anthropic and Cerebras always use
+  `max_tokens`.
+- `max_tokens_parameter` override for proxies and Azure-style endpoints.
+- 6500 compatibility fallback for missing, `None`, `0`, or negative limits.
+
+### Changed
+
+- Removed the error-driven `max_tokens` ↔ `max_completion_tokens` negotiation.
+  The chain no longer sends a request, inspects a provider rejection, and
+  resends with the other parameter. The correct parameter is selected before
+  the request, so a failed request is never retried just to change the
+  token-limit key.
+- Existing `max_tokens` configurations keep working. Custom
+  OpenAI-compatible endpoints continue to use `max_tokens`; the official
+  OpenAI endpoint uses `max_completion_tokens`.
+- Removed the error-driven token-parameter retry. The parameter is selected
+  before the request; existing `max_tokens` configurations remain compatible.
+
+### Preserved
+
+- Existing public constructors, streaming chunks, output formats,
+  `<tasks-sys>Done</tasks-sys>` sentinel, observer events, and
+  `stream_options` fallback behavior are unchanged.
+- No new runtime dependencies. Python 3.8+ remains supported.
+  If you want only the max-token part, use this shorter version:
+ 
 ## [0.2.1] - 2026-11-22
 
 ### Added

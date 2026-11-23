@@ -52,3 +52,7 @@ class ChainEvent:
     final_result_placeholder: Optional[str] = None
     error: Optional[BaseException] = None
     error_type: Optional[str] = None
+    #: Provider finish reason for this prompt (``stop``, ``length``,
+    #: ``end_turn``, ``max_tokens``, ...). ``None`` when the provider did not
+    #: report one. Always ``None`` for ``chain_end``.
+    finish_reason: Optional[str] = None
